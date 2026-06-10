@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 const PREDICTIONS = [
   { d:"11-Jun", h:"3:00 PM",  g:"A", t1:"México",               t2:"Sudáfrica",           p1:2, p2:0 },
@@ -108,19 +108,26 @@ const GROUP_FLAGS = {
 
 function flag(t) { return GROUP_FLAGS[t] || "🏳️"; }
 
-function computeStandings() {
+// predictions: the base list (hardcoded or synced from sheet)
+// realResults: { [matchKey]: { r1, r2 } } — actual scores entered by user
+function matchKey(m) { return `${m.d}|${m.t1}|${m.t2}`; }
+
+function computeStandings(predictions, realResults) {
   const st = {};
   Object.keys(GROUPS_TEAMS).forEach(g =>
     GROUPS_TEAMS[g].forEach(t => { st[t] = { pts:0, gf:0, ga:0, gd:0, played:0, group:g }; })
   );
-  PREDICTIONS.forEach(m => {
+  predictions.forEach(m => {
+    const real = realResults[matchKey(m)];
+    const g1 = real ? real.r1 : m.p1;
+    const g2 = real ? real.r2 : m.p2;
     const s1 = st[m.t1], s2 = st[m.t2];
     if (!s1 || !s2) return;
     s1.played++; s2.played++;
-    s1.gf += m.p1; s1.ga += m.p2; s1.gd = s1.gf - s1.ga;
-    s2.gf += m.p2; s2.ga += m.p1; s2.gd = s2.gf - s2.ga;
-    if (m.p1 > m.p2) { s1.pts += 3; }
-    else if (m.p1 < m.p2) { s2.pts += 3; }
+    s1.gf += g1; s1.ga += g2; s1.gd = s1.gf - s1.ga;
+    s2.gf += g2; s2.ga += g1; s2.gd = s2.gf - s2.ga;
+    if (g1 > g2) { s1.pts += 3; }
+    else if (g1 < g2) { s2.pts += 3; }
     else { s1.pts += 1; s2.pts += 1; }
   });
   return st;
@@ -137,7 +144,6 @@ function getAdvancing(st) {
   return adv;
 }
 
-// Group a list of matches by date label
 function groupByDate(matches) {
   const map = {};
   matches.forEach(m => {
@@ -147,11 +153,134 @@ function groupByDate(matches) {
   return map;
 }
 
+// ── Modal to enter a real result ──
+function ResultModal({ match, current, onSave, onClose }) {
+  const [r1, setR1] = useState(current?.r1 ?? "");
+  const [r2, setR2] = useState(current?.r2 ?? "");
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={onClose}>
+      <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-sm" onClick={e => e.stopPropagation()}>
+        <h2 className="text-xl font-black text-green-900 text-center mb-1">⚽ Resultado Real</h2>
+        <p className="text-center text-gray-500 text-sm mb-5">
+          {match.t1} vs {match.t2}<br/>
+          <span className="text-xs">{match.d} · {match.h} ET</span>
+        </p>
+        <div className="flex items-center gap-4 justify-center mb-6">
+          <div className="text-center">
+            <div className="text-3xl mb-1">{flag(match.t1)}</div>
+            <div className="font-bold text-sm text-green-900 mb-2">{match.t1}</div>
+            <input
+              type="number" min="0" max="20"
+              value={r1}
+              onChange={e => setR1(e.target.value)}
+              className="w-16 h-16 text-3xl font-black text-center border-3 border-green-400 rounded-2xl focus:outline-none focus:border-green-600 text-green-900"
+              style={{border:"3px solid #4ade80"}}
+            />
+          </div>
+          <div className="text-3xl font-black text-gray-400 mt-8">–</div>
+          <div className="text-center">
+            <div className="text-3xl mb-1">{flag(match.t2)}</div>
+            <div className="font-bold text-sm text-green-900 mb-2">{match.t2}</div>
+            <input
+              type="number" min="0" max="20"
+              value={r2}
+              onChange={e => setR2(e.target.value)}
+              className="w-16 h-16 text-3xl font-black text-center rounded-2xl focus:outline-none text-green-900"
+              style={{border:"3px solid #4ade80"}}
+            />
+          </div>
+        </div>
+        <div className="flex gap-3">
+          {current && (
+            <button
+              onClick={() => onSave(null)}
+              className="flex-1 py-3 rounded-2xl bg-red-50 text-red-600 font-bold text-base border-2 border-red-100"
+            >
+              🗑️ Borrar
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-bold text-base"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={() => {
+              const n1 = parseInt(r1), n2 = parseInt(r2);
+              if (!isNaN(n1) && !isNaN(n2) && n1 >= 0 && n2 >= 0) onSave({ r1: n1, r2: n2 });
+            }}
+            className="flex-1 py-3 rounded-2xl bg-green-600 text-white font-black text-base shadow"
+          >
+            ✅ Guardar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const [tab, setTab] = useState("grupos");
+  const [predictions, setPredictions] = useState(PREDICTIONS);
+  const [realResults, setRealResults] = useState({});
+  const [syncStatus, setSyncStatus] = useState(null); // null | "loading" | "ok" | "error"
+  const [syncMsg, setSyncMsg] = useState("");
+  const [syncedAt, setSyncedAt] = useState("");
+  const [editingMatch, setEditingMatch] = useState(null); // match object being edited
 
-  const standings = computeStandings();
+  // Load persisted data from localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("quiniela_real_results");
+      if (saved) setRealResults(JSON.parse(saved));
+      const savedAt = localStorage.getItem("quiniela_synced_at");
+      if (savedAt) setSyncedAt(savedAt);
+      const savedPreds = localStorage.getItem("quiniela_predictions");
+      if (savedPreds) setPredictions(JSON.parse(savedPreds));
+    } catch {}
+  }, []);
+
+  function saveRealResult(match, result) {
+    const key = matchKey(match);
+    setRealResults(prev => {
+      const next = { ...prev };
+      if (result === null) delete next[key];
+      else next[key] = result;
+      localStorage.setItem("quiniela_real_results", JSON.stringify(next));
+      return next;
+    });
+    setEditingMatch(null);
+  }
+
+  async function syncFromSheet() {
+    setSyncStatus("loading");
+    setSyncMsg("");
+    try {
+      const res = await fetch("/api/sync");
+      const data = await res.json();
+      if (data.error) {
+        setSyncStatus("error");
+        setSyncMsg(data.error);
+        return;
+      }
+      setPredictions(data.predictions);
+      localStorage.setItem("quiniela_predictions", JSON.stringify(data.predictions));
+      const at = new Date(data.syncedAt).toLocaleString("es-MX", { dateStyle:"short", timeStyle:"short" });
+      setSyncedAt(at);
+      localStorage.setItem("quiniela_synced_at", at);
+      setSyncStatus("ok");
+      setSyncMsg(`¡Listo! ${data.predictions.length} partidos actualizados.`);
+    } catch {
+      setSyncStatus("error");
+      setSyncMsg("No se pudo conectar. Verifica tu internet.");
+    }
+    setTimeout(() => setSyncStatus(null), 4000);
+  }
+
+  const standings = computeStandings(predictions, realResults);
   const adv = getAdvancing(standings);
+  const realCount = Object.keys(realResults).length;
 
   const sheetUrl = "https://docs.google.com/spreadsheets/d/1NDqZzWfJMsM9oHv_dKOnNFi5BykFaEx4/edit";
 
@@ -164,9 +293,18 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-green-50 font-sans pb-24">
 
+      {/* ── MODAL ── */}
+      {editingMatch && (
+        <ResultModal
+          match={editingMatch}
+          current={realResults[matchKey(editingMatch)]}
+          onSave={result => saveRealResult(editingMatch, result)}
+          onClose={() => setEditingMatch(null)}
+        />
+      )}
+
       {/* ── HEADER ── */}
       <div style={{background:"linear-gradient(135deg, #15803d 0%, #166534 60%, #14532d 100%)"}}>
-        {/* decorative field lines */}
         <div className="relative overflow-hidden">
           <div className="absolute inset-0 opacity-10 pointer-events-none" style={{
             backgroundImage:"repeating-linear-gradient(90deg, white 0, white 1px, transparent 1px, transparent 60px)",
@@ -180,14 +318,38 @@ export default function Home() {
             <p className="text-green-200 text-lg mt-1 font-medium">
               🌎 Mundial 2026 · USA · Canadá · México
             </p>
-            <a
-              href={sheetUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-block mt-4 bg-yellow-400 text-green-900 font-bold text-base px-5 py-2.5 rounded-full shadow-lg active:scale-95 transition"
-            >
-              📋 Ver mi quiniela completa
-            </a>
+            <div className="flex flex-wrap justify-center gap-3 mt-4">
+              <a
+                href={sheetUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-block bg-yellow-400 text-green-900 font-bold text-base px-5 py-2.5 rounded-full shadow-lg active:scale-95 transition"
+              >
+                📋 Ver mi quiniela
+              </a>
+              <button
+                onClick={syncFromSheet}
+                disabled={syncStatus === "loading"}
+                className="inline-flex items-center gap-2 bg-white/20 text-white border-2 border-white/40 font-bold text-base px-5 py-2.5 rounded-full shadow active:scale-95 transition disabled:opacity-60"
+              >
+                {syncStatus === "loading" ? "⏳ Actualizando..." : "🔄 Actualizar quiniela"}
+              </button>
+            </div>
+
+            {/* sync feedback */}
+            {syncStatus === "ok" && (
+              <div className="mt-3 bg-green-400/30 border border-green-300 text-white rounded-xl px-4 py-2 text-sm font-medium">
+                ✅ {syncMsg}
+              </div>
+            )}
+            {syncStatus === "error" && (
+              <div className="mt-3 bg-red-500/30 border border-red-300 text-white rounded-xl px-4 py-2 text-sm font-medium">
+                ❌ {syncMsg}
+              </div>
+            )}
+            {syncedAt && syncStatus !== "error" && syncStatus !== "loading" && (
+              <p className="text-green-300 text-xs mt-2">Última actualización: {syncedAt}</p>
+            )}
           </div>
         </div>
       </div>
@@ -328,14 +490,17 @@ export default function Home() {
             <div className="text-center mb-5">
               <h2 className="text-2xl font-black text-green-900">⚽ Todos los Partidos</h2>
               <p className="text-gray-600 text-base mt-1">
-                Las predicciones de Martín para los 72 partidos<br/>
-                <span className="text-sm">(Hora de Toronto)</span>
+                Toca el marcador para anotar el resultado real
               </p>
+              {realCount > 0 && (
+                <div className="inline-block mt-2 bg-blue-100 text-blue-800 font-bold text-sm px-4 py-1.5 rounded-full">
+                  📝 {realCount} resultado{realCount !== 1 ? "s" : ""} real{realCount !== 1 ? "es" : ""} anotado{realCount !== 1 ? "s" : ""}
+                </div>
+              )}
             </div>
 
-            {Object.entries(groupByDate(PREDICTIONS)).map(([date, matches]) => (
+            {Object.entries(groupByDate(predictions)).map(([date, matches]) => (
               <div key={date} className="mb-5">
-                {/* date header */}
                 <div className="flex items-center gap-3 mb-2 px-1">
                   <span className="text-base font-black text-green-800">📅 {date}</span>
                   <div className="flex-1 h-px bg-green-200" />
@@ -343,40 +508,48 @@ export default function Home() {
 
                 <div className="space-y-2">
                   {matches.map((m, i) => {
-                    const homeWins = m.p1 > m.p2;
-                    const awayWins = m.p2 > m.p1;
-                    const draw = m.p1 === m.p2;
+                    const real = realResults[matchKey(m)];
+                    const g1 = real ? real.r1 : m.p1;
+                    const g2 = real ? real.r2 : m.p2;
+                    const homeWins = g1 > g2;
+                    const awayWins = g2 > g1;
+                    const draw = g1 === g2;
                     return (
-                      <div key={i} className="bg-white rounded-2xl shadow-sm border-2 border-gray-100 overflow-hidden">
-                        {/* group + time badge */}
-                        <div className="bg-green-700 px-4 py-1.5 flex items-center justify-between">
-                          <span className="text-green-200 font-bold text-sm">Grupo {m.g}</span>
-                          <span className="text-green-200 text-sm">🕐 {m.h} ET</span>
+                      <div key={i} className={`bg-white rounded-2xl shadow-sm overflow-hidden border-2 ${real ? "border-blue-200" : "border-gray-100"}`}>
+                        <div className={`px-4 py-1.5 flex items-center justify-between ${real ? "bg-blue-600" : "bg-green-700"}`}>
+                          <span className="text-white/80 font-bold text-sm">Grupo {m.g}</span>
+                          <span className="text-white/80 text-sm">🕐 {m.h} ET</span>
+                          {real && <span className="text-white font-bold text-xs bg-blue-500 px-2 py-0.5 rounded-full">✏️ Real</span>}
                         </div>
-                        {/* match */}
-                        <div className="px-4 py-3 flex items-center gap-3">
-                          {/* home team */}
-                          <div className={`flex-1 flex items-center gap-2 ${homeWins ? "" : "opacity-50"}`}>
+                        <div className="px-3 py-3 flex items-center gap-2">
+                          <div className={`flex-1 flex items-center gap-2 ${!homeWins && !draw ? "opacity-40" : ""}`}>
                             <span className="text-3xl leading-none">{flag(m.t1)}</span>
-                            <span className={`font-bold text-base leading-tight ${homeWins ? "text-green-900" : "text-gray-600"}`}>
-                              {m.t1}
-                            </span>
+                            <span className="font-bold text-base leading-tight text-green-900">{m.t1}</span>
                           </div>
-                          {/* score */}
-                          <div className="shrink-0 text-center">
-                            <div className={`font-black text-2xl px-3 py-1 rounded-xl ${draw ? "bg-gray-100 text-gray-700" : "bg-green-900 text-white"}`}>
-                              {m.p1} – {m.p2}
-                            </div>
-                            {draw && <div className="text-xs text-gray-400 mt-0.5 font-bold">EMPATE</div>}
-                          </div>
-                          {/* away team */}
-                          <div className={`flex-1 flex items-center gap-2 justify-end ${awayWins ? "" : "opacity-50"}`}>
-                            <span className={`font-bold text-base leading-tight text-right ${awayWins ? "text-green-900" : "text-gray-600"}`}>
-                              {m.t2}
-                            </span>
+                          <button
+                            onClick={() => setEditingMatch(m)}
+                            className={`shrink-0 text-center rounded-2xl px-3 py-1.5 active:scale-95 transition ${real ? "bg-blue-600 text-white shadow-md" : "bg-green-900 text-white"}`}
+                          >
+                            <div className="font-black text-2xl whitespace-nowrap">{g1} – {g2}</div>
+                            <div className="text-xs opacity-70 mt-0.5">{real ? "resultado real" : "predicción · tocar"}</div>
+                          </button>
+                          <div className={`flex-1 flex items-center gap-2 justify-end ${!awayWins && !draw ? "opacity-40" : ""}`}>
+                            <span className="font-bold text-base leading-tight text-right text-green-900">{m.t2}</span>
                             <span className="text-3xl leading-none">{flag(m.t2)}</span>
                           </div>
                         </div>
+                        {real && (
+                          <div className="border-t border-blue-100 px-4 py-1.5 flex items-center gap-2 bg-blue-50">
+                            <span className="text-xs text-blue-500 font-medium">Predicción de Martín:</span>
+                            <span className="text-xs text-blue-700 font-bold">{m.p1} – {m.p2}</span>
+                            {m.p1 === real.r1 && m.p2 === real.r2
+                              ? <span className="ml-auto text-xs bg-green-500 text-white font-bold px-2 py-0.5 rounded-full">¡Exacto! 🎯</span>
+                              : ((m.p1 > m.p2) === (real.r1 > real.r2) && (m.p1 === m.p2) === (real.r1 === real.r2))
+                                ? <span className="ml-auto text-xs bg-yellow-400 text-yellow-900 font-bold px-2 py-0.5 rounded-full">Ganador correcto ⚽</span>
+                                : <span className="ml-auto text-xs bg-red-100 text-red-600 font-bold px-2 py-0.5 rounded-full">Falló ❌</span>
+                            }
+                          </div>
+                        )}
                       </div>
                     );
                   })}
