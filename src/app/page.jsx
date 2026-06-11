@@ -519,8 +519,11 @@ export default function Home() {
           <div>
             <div className="text-center mb-5">
               <h2 className="text-2xl font-black text-green-900">🏟️ Fase de Grupos</h2>
-              <p className="text-gray-600 text-base mt-1">
-                Los equipos marcados en <span className="text-green-700 font-bold">verde</span> clasifican según las predicciones de Martín
+              <div className="inline-block mt-2 bg-yellow-100 text-yellow-800 font-bold text-sm px-3 py-1 rounded-full">
+                📊 Proyección basada en las predicciones de Martín
+              </div>
+              <p className="text-gray-500 text-sm mt-2">
+                Los equipos en <span className="text-green-700 font-bold">verde</span> clasificarían si sus predicciones se cumplen
               </p>
             </div>
 
@@ -533,7 +536,7 @@ export default function Home() {
                   <div key={g} className="bg-white rounded-2xl shadow-md overflow-hidden border-2 border-green-100">
                     <div className="bg-green-700 px-4 py-3 flex items-center gap-2">
                       <span className="text-white font-black text-xl">GRUPO {g}</span>
-                      <span className="ml-auto text-green-200 text-sm font-medium">Pts · GD · Goles</span>
+                      <span className="ml-auto text-green-200 text-sm font-medium">Pts proyectados</span>
                     </div>
                     {ranked.map((t, i) => (
                       <div key={t.name} className={`flex items-center gap-3 px-4 py-3 border-b border-gray-100 last:border-b-0 ${i < 2 ? "bg-green-50" : "bg-white opacity-60"}`}>
@@ -549,10 +552,7 @@ export default function Home() {
                             ✓ Clasifica
                           </span>
                         )}
-                        <div className="text-right shrink-0">
-                          <div className={`font-black text-xl ${i < 2 ? "text-green-800" : "text-gray-400"}`}>{t.pts}</div>
-                          <div className="text-xs text-gray-400">{t.gd > 0 ? `+${t.gd}` : t.gd} · {t.gf}gf</div>
-                        </div>
+                        <div className={`font-black text-xl shrink-0 ${i < 2 ? "text-green-800" : "text-gray-400"}`}>{t.pts}</div>
                       </div>
                     ))}
                   </div>
