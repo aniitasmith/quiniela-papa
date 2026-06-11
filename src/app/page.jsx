@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
+import { cn } from "@/lib/utils";
 
 // ── Data ─────────────────────────────────────────────────────────────────────
 
@@ -243,7 +244,6 @@ function ResultModal({ match, current, onSave, onClose }) {
               value={r1}
               onChange={e => setR1(e.target.value)}
               className="w-16 h-16 text-3xl font-black text-center border-3 border-green-400 rounded-2xl focus:outline-none focus:border-green-600 text-green-900"
-              style={{border:"3px solid #4ade80"}}
             />
           </div>
           <div className="text-3xl font-black text-gray-400 mt-8">–</div>
@@ -254,8 +254,7 @@ function ResultModal({ match, current, onSave, onClose }) {
               type="number" min="0" max="20"
               value={r2}
               onChange={e => setR2(e.target.value)}
-              className="w-16 h-16 text-3xl font-black text-center rounded-2xl focus:outline-none text-green-900"
-              style={{border:"3px solid #4ade80"}}
+              className="w-16 h-16 text-3xl font-black text-center border-3 border-green-400 rounded-2xl focus:outline-none focus:border-green-600 text-green-900"
             />
           </div>
         </div>
@@ -449,11 +448,9 @@ export default function Home() {
       )}
 
       {/* ── HEADER ── */}
-      <div style={{background:"linear-gradient(135deg, #15803d 0%, #166534 60%, #14532d 100%)"}}>
+      <div className="bg-header-gradient">
         <div className="relative overflow-hidden">
-          <div className="absolute inset-0 opacity-10 pointer-events-none" style={{
-            backgroundImage:"repeating-linear-gradient(90deg, white 0, white 1px, transparent 1px, transparent 60px)",
-          }} />
+          <div className="absolute inset-0 opacity-10 pointer-events-none bg-grid-lines" />
           <div className="relative max-w-2xl mx-auto px-5 py-6 text-center">
             <div className="bounce-slow inline-block text-6xl mb-2">⚽</div>
             <h1 className="text-white font-black text-3xl leading-tight drop-shadow">
@@ -539,12 +536,12 @@ export default function Home() {
                       <span className="ml-auto text-green-200 text-sm font-medium">Pts proyectados</span>
                     </div>
                     {ranked.map((t, i) => (
-                      <div key={t.name} className={`flex items-center gap-3 px-4 py-3 border-b border-gray-100 last:border-b-0 ${i < 2 ? "bg-green-50" : "bg-white opacity-60"}`}>
-                        <span className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-base shrink-0 ${i === 0 ? "bg-yellow-400 text-yellow-900" : i === 1 ? "bg-green-500 text-white" : "bg-gray-200 text-gray-500"}`}>
+                      <div key={t.name} className={cn("flex items-center gap-3 px-4 py-3 border-b border-gray-100 last:border-b-0", i < 2 ? "bg-green-50" : "bg-white opacity-60")}>
+                        <span className={cn("w-8 h-8 rounded-full flex items-center justify-center font-black text-base shrink-0", i === 0 ? "bg-yellow-400 text-yellow-900" : i === 1 ? "bg-green-500 text-white" : "bg-gray-200 text-gray-500")}>
                           {i + 1}
                         </span>
                         <span className="text-3xl leading-none shrink-0">{flag(t.name)}</span>
-                        <span className={`font-bold text-lg flex-1 ${i < 2 ? "text-green-900" : "text-gray-500"}`}>
+                        <span className={cn("font-bold text-lg flex-1", i < 2 ? "text-green-900" : "text-gray-500")}>
                           {t.name}
                         </span>
                         {i < 2 && (
@@ -552,7 +549,7 @@ export default function Home() {
                             ✓ Clasifica
                           </span>
                         )}
-                        <div className={`font-black text-xl shrink-0 ${i < 2 ? "text-green-800" : "text-gray-400"}`}>{t.pts}</div>
+                        <div className={cn("font-black text-xl shrink-0", i < 2 ? "text-green-800" : "text-gray-400")}>{t.pts}</div>
                       </div>
                     ))}
                   </div>
@@ -661,8 +658,8 @@ export default function Home() {
                     const awayWins = g2 > g1;
                     const draw = g1 === g2;
                     return (
-                      <div key={i} className={`bg-white rounded-2xl shadow-sm overflow-hidden border-2 ${real ? "border-blue-200" : "border-gray-100"}`}>
-                        <div className={`px-4 py-1.5 flex items-center justify-between ${real ? "bg-blue-600" : "bg-green-700"}`}>
+                      <div key={i} className={cn("bg-white rounded-2xl shadow-sm overflow-hidden border-2", real ? "border-blue-200" : "border-gray-100")}>
+                        <div className={cn("px-4 py-1.5 flex items-center justify-between", real ? "bg-blue-600" : "bg-green-700")}>
                           <span className="text-white/80 font-bold text-sm">Grupo {m.g}</span>
                           <span className="text-white/80 text-sm">🕐 {m.h} ET</span>
                           {real && <span className="text-white font-bold text-xs bg-blue-500 px-2 py-0.5 rounded-full">✏️ Real</span>}
@@ -670,12 +667,12 @@ export default function Home() {
                         <div className="px-3 py-3 flex items-center gap-2">
                           {/* home team — name always visible, flag dims if lost */}
                           <div className="flex-1 flex items-center gap-2 min-w-0">
-                            <span className={`text-3xl leading-none shrink-0 ${!homeWins && !draw ? "opacity-40" : ""}`}>{flag(m.t1)}</span>
+                            <span className={cn("text-3xl leading-none shrink-0", !homeWins && !draw && "opacity-40")}>{flag(m.t1)}</span>
                             <span className="font-bold text-base leading-tight text-green-900 truncate">{m.t1}</span>
                           </div>
                           <button
                             onClick={() => setEditingMatch(m)}
-                            className={`shrink-0 text-center rounded-2xl px-3 py-1.5 active:scale-95 transition ${real ? "bg-blue-600 text-white shadow-md" : "bg-green-900 text-white"}`}
+                            className={cn("shrink-0 text-center rounded-2xl px-3 py-1.5 active:scale-95 transition", real ? "bg-blue-600 text-white shadow-md" : "bg-green-900 text-white")}
                           >
                             <div className="font-black text-2xl whitespace-nowrap">{g1} – {g2}</div>
                             <div className="text-xs opacity-70 mt-0.5">{real ? "resultado real" : "predicción · tocar"}</div>
@@ -683,7 +680,7 @@ export default function Home() {
                           {/* away team — name always visible, flag dims if lost */}
                           <div className="flex-1 flex items-center gap-2 justify-end min-w-0">
                             <span className="font-bold text-base leading-tight text-right text-green-900 truncate">{m.t2}</span>
-                            <span className={`text-3xl leading-none shrink-0 ${!awayWins && !draw ? "opacity-40" : ""}`}>{flag(m.t2)}</span>
+                            <span className={cn("text-3xl leading-none shrink-0", !awayWins && !draw && "opacity-40")}>{flag(m.t2)}</span>
                           </div>
                         </div>
                         {real && (
@@ -797,7 +794,7 @@ export default function Home() {
                           <span className="text-gray-400 text-sm font-bold mx-1">{real.r1}–{real.r2}</span>
                           <span className="font-bold text-sm text-gray-800">{m.t2}</span>
                           <span className="text-xl">{flag(m.t2)}</span>
-                          <span className={`ml-auto font-black text-lg ${pts >= 5 ? "text-green-600" : pts >= 2 ? "text-yellow-600" : "text-gray-400"}`}>
+                          <span className={cn("ml-auto font-black text-lg", pts >= 5 ? "text-green-600" : pts >= 2 ? "text-yellow-600" : "text-gray-400")}>
                             {pts} pts
                           </span>
                         </div>
@@ -826,14 +823,10 @@ export default function Home() {
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
-              className={`flex-1 flex flex-col items-center justify-center gap-1 py-3 transition-all ${
-                tab === t.id
-                  ? "text-green-700 bg-green-50"
-                  : "text-gray-400"
-              }`}
+              className={cn("flex-1 flex flex-col items-center justify-center gap-1 py-3 transition-all", tab === t.id ? "text-green-700 bg-green-50" : "text-gray-400")}
             >
               <span className="text-3xl leading-none">{t.icon}</span>
-              <span className={`text-sm font-bold ${tab === t.id ? "text-green-700" : "text-gray-400"}`}>
+              <span className={cn("text-sm font-bold", tab === t.id ? "text-green-700" : "text-gray-400")}>
                 {t.label}
               </span>
               {tab === t.id && (
