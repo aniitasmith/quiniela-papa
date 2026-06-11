@@ -1,5 +1,7 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+
+// ── Data ─────────────────────────────────────────────────────────────────────
 
 const PREDICTIONS = [
   { d:"11-Jun", h:"3:00 PM",  g:"A", t1:"México",               t2:"Sudáfrica",           p1:2, p2:0 },
@@ -106,9 +108,12 @@ const GROUP_FLAGS = {
   "Inglaterra":"🏴󠁧󠁢󠁥󠁮󠁧󠁿","Croacia":"🇭🇷","Ghana":"🇬🇭","Panamá":"🇵🇦",
 };
 
-// Normalize: strip accents + lowercase for fuzzy flag lookup
+// ── Utilities ────────────────────────────────────────────────────────────────
+
+// Strip accents + lowercase — used for flag lookup and sheet→PREDICTIONS matching.
 // Handles "Mexico" → "México", "Belgica" → "Bélgica", etc.
 const _norm = s => s?.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").trim() ?? "";
+
 const _flagByNorm = Object.fromEntries(
   Object.entries(GROUP_FLAGS).map(([k,v]) => [_norm(k), v])
 );
@@ -116,11 +121,9 @@ function flag(t) {
   return GROUP_FLAGS[t] ?? _flagByNorm[_norm(t)] ?? "🏳️";
 }
 
-// predictions: the base list (hardcoded or synced from sheet)
-// realResults: { [matchKey]: { r1, r2 } } — actual scores entered by user
 function matchKey(m) { return `${m.d}|${m.t1}|${m.t2}`; }
 
-// ── Scoring (Reglas Oficiales de la Quiniela) ──
+// ── Scoring (Reglas Oficiales de la Quiniela) ────────────────────────────────
 // 3 pts: acertar ganador · 2 pts: acertar empate
 // 2 pts: acertar goles del equipo local (independiente del resultado)
 // 2 pts: acertar goles del equipo visitante (independiente del resultado)
@@ -147,6 +150,8 @@ function totalScore(predictions, realResults) {
   });
   return { total, played };
 }
+
+// ── Standings ────────────────────────────────────────────────────────────────
 
 function computeStandings(predictions, realResults) {
   const st = {};
@@ -189,12 +194,32 @@ function groupByDate(matches) {
   return map;
 }
 
-// ── Modal to enter a real result ──
+// ── Sync helpers ─────────────────────────────────────────────────────────────
+
+// Build lookup: norm(t1)|norm(t2) → canonical matchKey from PREDICTIONS
+const _predIndex = {};
+PREDICTIONS.forEach(m => {
+  _predIndex[`${_norm(m.t1)}|${_norm(m.t2)}`] = matchKey(m);
+});
+
+// Only matches found in PREDICTIONS are kept — team names/dates never change
+function buildOverrides(syncedRows) {
+  const overrides = {};
+  syncedRows.forEach(row => {
+    const canonKey = _predIndex[`${_norm(row.t1)}|${_norm(row.t2)}`];
+    if (canonKey && !isNaN(row.p1) && !isNaN(row.p2)) {
+      overrides[canonKey] = { p1: row.p1, p2: row.p2 };
+    }
+  });
+  return overrides;
+}
+
+// ── Modal ─────────────────────────────────────────────────────────────────────
+
 function ResultModal({ match, current, onSave, onClose }) {
   const [r1, setR1] = useState(current?.r1 ?? "");
   const [r2, setR2] = useState(current?.r2 ?? "");
 
-  // Close on Escape key
   useEffect(() => {
     const handler = e => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", handler);
@@ -264,41 +289,19 @@ function ResultModal({ match, current, onSave, onClose }) {
   );
 }
 
-// Normalize for fuzzy team-name matching between sheet and PREDICTIONS
-const _normKey = s => s?.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").trim() ?? "";
-
-// Build lookup: normKey(t1)|normKey(t2) → canonical matchKey from PREDICTIONS
-const _predIndex = {};
-PREDICTIONS.forEach(m => {
-  const k = `${_normKey(m.t1)}|${_normKey(m.t2)}`;
-  _predIndex[k] = matchKey(m);
-});
-
-// Given synced rows from CSV, build a map of canonicalMatchKey → { p1, p2 }
-// Only matches found in PREDICTIONS are kept — team names/dates never change
-function buildOverrides(syncedRows) {
-  const overrides = {};
-  syncedRows.forEach(row => {
-    const k = `${_normKey(row.t1)}|${_normKey(row.t2)}`;
-    const canonKey = _predIndex[k];
-    if (canonKey && !isNaN(row.p1) && !isNaN(row.p2)) {
-      overrides[canonKey] = { p1: row.p1, p2: row.p2 };
-    }
-  });
-  return overrides;
-}
+// ── Main component ────────────────────────────────────────────────────────────
 
 export default function Home() {
-  const [tab, setTab] = useState("grupos");
+  const [tab, setTab]                     = useState("grupos");
   // predOverrides: { [matchKey]: { p1, p2 } } — only scores, matched to PREDICTIONS keys
   // PREDICTIONS structure (team names, dates, groups) never changes
   const [predOverrides, setPredOverrides] = useState({});
   const [realResults, setRealResults]     = useState({});
   const [syncStatus, setSyncStatus]       = useState(null);
   const [syncMsg, setSyncMsg]             = useState("");
+  const [syncDebug, setSyncDebug]         = useState("");
   const [syncedAt, setSyncedAt]           = useState("");
   const [editingMatch, setEditingMatch]   = useState(null);
-  const [syncDebug, setSyncDebug]         = useState("");
 
   // Effective predictions: PREDICTIONS structure + synced scores applied on top
   const predictions = PREDICTIONS.map(m => {
@@ -306,51 +309,7 @@ export default function Home() {
     return ov ? { ...m, p1: ov.p1, p2: ov.p2 } : m;
   });
 
-  useEffect(() => {
-    // Clean up legacy key from previous version
-    localStorage.removeItem("quiniela_predictions");
-
-    try {
-      const saved = localStorage.getItem("quiniela_real_results");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-          setRealResults(parsed);
-        }
-      }
-    } catch { localStorage.removeItem("quiniela_real_results"); }
-
-    try {
-      const savedAt = localStorage.getItem("quiniela_synced_at");
-      if (savedAt) setSyncedAt(savedAt);
-    } catch {}
-
-    try {
-      const savedOv = localStorage.getItem("quiniela_pred_overrides");
-      if (savedOv) {
-        const parsed = JSON.parse(savedOv);
-        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-          setPredOverrides(parsed);
-        }
-      }
-    } catch { localStorage.removeItem("quiniela_pred_overrides"); }
-
-    syncFromSheet({ silent: true });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function saveRealResult(match, result) {
-    const key = matchKey(match);
-    setRealResults(prev => {
-      const next = { ...prev };
-      if (result === null) delete next[key];
-      else next[key] = result;
-      try { localStorage.setItem("quiniela_real_results", JSON.stringify(next)); } catch {}
-      return next;
-    });
-    setEditingMatch(null);
-  }
-
-  async function syncFromSheet({ silent = false } = {}) {
+  const syncFromSheet = useCallback(async ({ silent = false } = {}) => {
     if (!silent) { setSyncStatus("loading"); setSyncMsg(""); setSyncDebug(""); }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
@@ -409,6 +368,49 @@ export default function Home() {
         setTimeout(() => setSyncStatus(null), 8000);
       }
     }
+  }, []);
+
+  useEffect(() => {
+    localStorage.removeItem("quiniela_predictions"); // legacy key cleanup
+
+    try {
+      const saved = localStorage.getItem("quiniela_real_results");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+          setRealResults(parsed);
+        }
+      }
+    } catch { localStorage.removeItem("quiniela_real_results"); }
+
+    try {
+      const savedAt = localStorage.getItem("quiniela_synced_at");
+      if (savedAt) setSyncedAt(savedAt);
+    } catch {}
+
+    try {
+      const savedOv = localStorage.getItem("quiniela_pred_overrides");
+      if (savedOv) {
+        const parsed = JSON.parse(savedOv);
+        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+          setPredOverrides(parsed);
+        }
+      }
+    } catch { localStorage.removeItem("quiniela_pred_overrides"); }
+
+    syncFromSheet({ silent: true });
+  }, [syncFromSheet]);
+
+  function saveRealResult(match, result) {
+    const key = matchKey(match);
+    setRealResults(prev => {
+      const next = { ...prev };
+      if (result === null) delete next[key];
+      else next[key] = result;
+      try { localStorage.setItem("quiniela_real_results", JSON.stringify(next)); } catch {}
+      return next;
+    });
+    setEditingMatch(null);
   }
 
   function resetOverrides() {
@@ -420,26 +422,23 @@ export default function Home() {
     } catch {}
   }
 
-  const standings = computeStandings(predictions, realResults);
-  const adv = getAdvancing(standings);
-  const realCount = Object.keys(realResults).length;
+  const standings     = computeStandings(predictions, realResults);
+  const adv           = getAdvancing(standings);
+  const score         = totalScore(predictions, realResults);
+  const realCount     = Object.keys(realResults).length;
   const overrideCount = Object.keys(predOverrides).length;
-
-  const sheetUrl = "https://docs.google.com/spreadsheets/d/1NDqZzWfJMsM9oHv_dKOnNFi5BykFaEx4/edit";
-
-  const score = totalScore(predictions, realResults);
+  const sheetUrl      = "https://docs.google.com/spreadsheets/d/1NDqZzWfJMsM9oHv_dKOnNFi5BykFaEx4/edit";
 
   const tabs = [
-    { id:"grupos",   icon:"🏟️",  label:"Grupos"   },
-    { id:"bracket",  icon:"🏆",  label:"Bracket"  },
-    { id:"partidos", icon:"⚽",  label:"Partidos" },
+    { id:"grupos",   icon:"🏟️",  label:"Grupos"     },
+    { id:"bracket",  icon:"🏆",  label:"Bracket"    },
+    { id:"partidos", icon:"⚽",  label:"Partidos"   },
     { id:"puntos",   icon:"🎯",  label:"Mis Puntos" },
   ];
 
   return (
     <main className="min-h-screen bg-green-50 font-sans pb-24">
 
-      {/* ── MODAL ── */}
       {editingMatch && (
         <ResultModal
           match={editingMatch}
@@ -482,7 +481,6 @@ export default function Home() {
               </button>
             </div>
 
-            {/* sync feedback */}
             {syncStatus === "ok" && (
               <div className="mt-3 bg-green-400/30 border border-green-300 text-white rounded-xl px-4 py-2 text-sm font-medium">
                 ✅ {syncMsg}
@@ -528,35 +526,29 @@ export default function Home() {
 
             <div className="space-y-4">
               {Object.keys(GROUPS_TEAMS).map(g => {
-                const rows = GROUPS_TEAMS[g]
+                const ranked = GROUPS_TEAMS[g]
                   .map(t => ({ name:t, ...standings[t] }))
                   .sort((a,b) => b.pts - a.pts || b.gd - a.gd || b.gf - a.gf);
                 return (
                   <div key={g} className="bg-white rounded-2xl shadow-md overflow-hidden border-2 border-green-100">
-                    {/* group header */}
                     <div className="bg-green-700 px-4 py-3 flex items-center gap-2">
                       <span className="text-white font-black text-xl">GRUPO {g}</span>
                       <span className="ml-auto text-green-200 text-sm font-medium">Pts · GD · Goles</span>
                     </div>
-                    {/* rows */}
-                    {rows.map((t, i) => (
+                    {ranked.map((t, i) => (
                       <div key={t.name} className={`flex items-center gap-3 px-4 py-3 border-b border-gray-100 last:border-b-0 ${i < 2 ? "bg-green-50" : "bg-white opacity-60"}`}>
-                        {/* position badge */}
                         <span className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-base shrink-0 ${i === 0 ? "bg-yellow-400 text-yellow-900" : i === 1 ? "bg-green-500 text-white" : "bg-gray-200 text-gray-500"}`}>
                           {i + 1}
                         </span>
-                        {/* flag + name */}
                         <span className="text-3xl leading-none shrink-0">{flag(t.name)}</span>
                         <span className={`font-bold text-lg flex-1 ${i < 2 ? "text-green-900" : "text-gray-500"}`}>
                           {t.name}
                         </span>
-                        {/* classified badge */}
                         {i < 2 && (
                           <span className="text-xs bg-green-600 text-white font-bold px-2 py-0.5 rounded-full shrink-0">
                             ✓ Clasifica
                           </span>
                         )}
-                        {/* stats */}
                         <div className="text-right shrink-0">
                           <div className={`font-black text-xl ${i < 2 ? "text-green-800" : "text-gray-400"}`}>{t.pts}</div>
                           <div className="text-xs text-gray-400">{t.gd > 0 ? `+${t.gd}` : t.gd} · {t.gf}gf</div>
@@ -581,7 +573,6 @@ export default function Home() {
               </p>
             </div>
 
-            {/* Clasificados section */}
             <div className="bg-white rounded-2xl shadow-md border-2 border-green-100 overflow-hidden mb-5">
               <div className="bg-green-700 px-4 py-3">
                 <h3 className="text-white font-black text-xl">✅ Clasificados de Grupos</h3>
@@ -593,13 +584,11 @@ export default function Home() {
                     <div className="bg-green-100 text-green-800 font-black text-sm px-3 py-1.5 text-center">
                       GRUPO {g}
                     </div>
-                    {/* 1st */}
                     <div className="flex items-center gap-2 px-3 py-2 bg-yellow-50 border-b border-green-100">
                       <span className="bg-yellow-400 text-yellow-900 font-black text-xs w-5 h-5 rounded-full flex items-center justify-center shrink-0">1</span>
                       <span className="text-2xl leading-none">{flag(adv[g]?.[0])}</span>
                       <span className="font-bold text-sm text-green-900 truncate">{adv[g]?.[0]}</span>
                     </div>
-                    {/* 2nd */}
                     <div className="flex items-center gap-2 px-3 py-2 bg-green-50">
                       <span className="bg-green-500 text-white font-black text-xs w-5 h-5 rounded-full flex items-center justify-center shrink-0">2</span>
                       <span className="text-2xl leading-none">{flag(adv[g]?.[1])}</span>
@@ -610,7 +599,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Pending rounds */}
             {[
               { label:"⚔️ Octavos de Final", dates:"~Jul 1–3" },
               { label:"🎯 Cuartos de Final", dates:"~Jul 4–5" },
@@ -629,7 +617,6 @@ export default function Home() {
               </div>
             ))}
 
-            {/* Final */}
             <div className="bg-white rounded-2xl shadow-sm border-2 border-gray-100 overflow-hidden mb-4 opacity-60">
               <div className="bg-gray-100 px-4 py-3 flex items-center justify-between">
                 <h3 className="font-black text-lg text-gray-500">🏆 Gran Final</h3>
@@ -719,6 +706,7 @@ export default function Home() {
             ))}
           </div>
         )}
+
         {/* ══ TAB: PUNTOS ══ */}
         {tab === "puntos" && (
           <div>
@@ -729,7 +717,6 @@ export default function Home() {
               </p>
             </div>
 
-            {/* Score card grande */}
             <div className="bg-gradient-to-br from-green-700 to-green-900 rounded-3xl p-6 text-center text-white shadow-xl mb-6">
               <div className="text-6xl font-black mb-1">{score.total}</div>
               <div className="text-green-200 text-lg font-bold">puntos totales</div>
@@ -744,7 +731,6 @@ export default function Home() {
               )}
             </div>
 
-            {/* Reglas de puntuación */}
             <div className="bg-white rounded-2xl shadow-md border-2 border-green-100 overflow-hidden mb-5">
               <div className="bg-green-700 px-4 py-3">
                 <h3 className="text-white font-black text-lg">📋 Cómo se cuentan los puntos</h3>
@@ -770,7 +756,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Premios */}
             <div className="bg-white rounded-2xl shadow-md border-2 border-yellow-100 overflow-hidden mb-5">
               <div className="bg-yellow-500 px-4 py-3">
                 <h3 className="text-white font-black text-lg">🏅 Premios</h3>
@@ -795,7 +780,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Desglose por partido si hay resultados */}
             {score.played > 0 && (
               <div className="bg-white rounded-2xl shadow-md border-2 border-green-100 overflow-hidden">
                 <div className="bg-green-700 px-4 py-3">
