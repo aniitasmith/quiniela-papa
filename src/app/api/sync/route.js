@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 const SHEET_ID = "1NDqZzWfJMsM9oHv_dKOnNFi5BykFaEx4";
 const GID      = "1964972787";
 
@@ -73,7 +75,6 @@ function parseSheet(csv) {
     return -1;
   };
 
-  // Detect column positions from header names
   const iDate  = find("fecha","date","dia","jornada","day");
   const iHour  = find("hora","time","hour","horario");
   const iGroup = find("grupo","group","grp");
@@ -89,7 +90,17 @@ function parseSheet(csv) {
     if (row.length < 4 || row.every(c => c === "")) continue;
 
     const t1 = iT1 >= 0 ? row[iT1] : row[3];
-    const t2 = iT2 >= 0 ? row[iT2] : (row[4] ?? "");
+
+    // Detect the "t1 > p1 p2 < t2" layout common in quiniela sheets
+    let t2;
+    if (iT2 >= 0) {
+      t2 = row[iT2];
+    } else if (row[4] === ">") {
+      const ltIdx = row.indexOf("<");
+      t2 = ltIdx > 0 ? (row[ltIdx + 1] ?? "") : (row[8] ?? "");
+    } else {
+      t2 = row[4] ?? "";
+    }
 
     // Find numeric scores — prefer header-mapped, else scan for numeric pair
     let p1 = iP1 >= 0 ? parseInt(row[iP1]) : NaN;

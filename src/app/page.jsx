@@ -306,7 +306,6 @@ export default function Home() {
     return ov ? { ...m, p1: ov.p1, p2: ov.p2 } : m;
   });
 
-  // Load persisted data from localStorage
   useEffect(() => {
     // Clean up legacy key from previous version
     localStorage.removeItem("quiniela_predictions");
@@ -335,7 +334,9 @@ export default function Home() {
         }
       }
     } catch { localStorage.removeItem("quiniela_pred_overrides"); }
-  }, []);
+
+    syncFromSheet({ silent: true });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function saveRealResult(match, result) {
     const key = matchKey(match);
@@ -349,50 +350,40 @@ export default function Home() {
     setEditingMatch(null);
   }
 
-  async function syncFromSheet() {
-    setSyncStatus("loading");
-    setSyncMsg("");
-    setSyncDebug("");
+  async function syncFromSheet({ silent = false } = {}) {
+    if (!silent) { setSyncStatus("loading"); setSyncMsg(""); setSyncDebug(""); }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
     try {
-      const res = await fetch("/api/sync", { signal: controller.signal });
+      const res = await fetch(`/api/sync?t=${Date.now()}`, {
+        signal: controller.signal,
+        cache: "no-store",
+      });
       clearTimeout(timeout);
       const data = await res.json();
-      console.log("[sync] respuesta del servidor:", data);
 
       if (data.error) {
-        setSyncStatus("error");
-        setSyncMsg(data.error);
-        setSyncDebug(data.debug ?? "");
-        setTimeout(() => setSyncStatus(null), 8000);
+        if (!silent) {
+          setSyncStatus("error");
+          setSyncMsg(data.error);
+          setSyncDebug(data.debug ?? "");
+          setTimeout(() => setSyncStatus(null), 8000);
+        }
         return;
       }
 
       const rows = data.rows ?? [];
-      console.log("[sync] filas parseadas del sheet:", rows.length, rows.slice(0, 3));
-      console.log("[sync] índice de PREDICTIONS (norm):", Object.keys(_predIndex).slice(0, 5));
-
-      // Log each row's match attempt
-      rows.forEach(row => {
-        const k = `${_normKey(row.t1)}|${_normKey(row.t2)}`;
-        const found = _predIndex[k];
-        if (!found) {
-          console.warn(`[sync] sin match: "${row.t1}" vs "${row.t2}" → normKey="${k}"`);
-        }
-      });
-
-      // Build overrides: only update scores for matches that exist in PREDICTIONS
       const overrides = buildOverrides(rows);
       const matchedCount = Object.keys(overrides).length;
-      console.log("[sync] matches encontrados:", matchedCount, "de", rows.length, "filas");
 
       if (matchedCount === 0) {
-        const sheetTeams = rows.slice(0, 4).map(r => `"${r.t1}" vs "${r.t2}"`).join(", ");
-        setSyncStatus("error");
-        setSyncMsg("No se pudo hacer coincidir ningún partido del spreadsheet con la quiniela.");
-        setSyncDebug(`Equipos en el sheet: ${sheetTeams || "(ninguno)"} | Cabeceras: ${data.headers}`);
-        setTimeout(() => setSyncStatus(null), 15000);
+        if (!silent) {
+          const sheetTeams = rows.slice(0, 4).map(r => `"${r.t1}" vs "${r.t2}"`).join(", ");
+          setSyncStatus("error");
+          setSyncMsg("No se pudo hacer coincidir ningún partido del spreadsheet con la quiniela.");
+          setSyncDebug(`Equipos en el sheet: ${sheetTeams || "(ninguno)"} | Cabeceras: ${data.headers}`);
+          setTimeout(() => setSyncStatus(null), 15000);
+        }
         return;
       }
 
@@ -402,16 +393,22 @@ export default function Home() {
       const at = new Date(data.syncedAt).toLocaleString("es-MX", { dateStyle:"short", timeStyle:"short" });
       setSyncedAt(at);
       try { localStorage.setItem("quiniela_synced_at", at); } catch {}
-      setSyncStatus("ok");
-      setSyncMsg(`¡Listo! ${matchedCount} de ${PREDICTIONS.length} partidos actualizados desde el spreadsheet.`);
+
+      if (!silent) {
+        setSyncStatus("ok");
+        setSyncMsg(`¡Listo! ${matchedCount} de ${PREDICTIONS.length} partidos actualizados desde el spreadsheet.`);
+        setTimeout(() => setSyncStatus(null), 8000);
+      }
     } catch (e) {
       clearTimeout(timeout);
-      setSyncStatus("error");
-      setSyncMsg(e.name === "AbortError"
-        ? "La conexión tardó demasiado. Intenta de nuevo."
-        : "No se pudo conectar. Verifica tu internet.");
+      if (!silent) {
+        setSyncStatus("error");
+        setSyncMsg(e.name === "AbortError"
+          ? "La conexión tardó demasiado. Intenta de nuevo."
+          : "No se pudo conectar. Verifica tu internet.");
+        setTimeout(() => setSyncStatus(null), 8000);
+      }
     }
-    setTimeout(() => setSyncStatus(null), 8000);
   }
 
   function resetOverrides() {
