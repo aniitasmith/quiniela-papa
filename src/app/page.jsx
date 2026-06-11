@@ -264,22 +264,57 @@ function ResultModal({ match, current, onSave, onClose }) {
   );
 }
 
+// Normalize for fuzzy team-name matching between sheet and PREDICTIONS
+const _normKey = s => s?.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").trim() ?? "";
+
+// Build lookup: normKey(t1)|normKey(t2) → canonical matchKey from PREDICTIONS
+const _predIndex = {};
+PREDICTIONS.forEach(m => {
+  const k = `${_normKey(m.t1)}|${_normKey(m.t2)}`;
+  _predIndex[k] = matchKey(m);
+});
+
+// Given synced rows from CSV, build a map of canonicalMatchKey → { p1, p2 }
+// Only matches found in PREDICTIONS are kept — team names/dates never change
+function buildOverrides(syncedRows) {
+  const overrides = {};
+  syncedRows.forEach(row => {
+    const k = `${_normKey(row.t1)}|${_normKey(row.t2)}`;
+    const canonKey = _predIndex[k];
+    if (canonKey && !isNaN(row.p1) && !isNaN(row.p2)) {
+      overrides[canonKey] = { p1: row.p1, p2: row.p2 };
+    }
+  });
+  return overrides;
+}
+
 export default function Home() {
   const [tab, setTab] = useState("grupos");
-  const [predictions, setPredictions] = useState(PREDICTIONS);
-  const [realResults, setRealResults] = useState({});
-  const [syncStatus, setSyncStatus] = useState(null); // null | "loading" | "ok" | "error"
-  const [syncMsg, setSyncMsg] = useState("");
-  const [syncedAt, setSyncedAt] = useState("");
-  const [editingMatch, setEditingMatch] = useState(null); // match object being edited
+  // predOverrides: { [matchKey]: { p1, p2 } } — only scores, matched to PREDICTIONS keys
+  // PREDICTIONS structure (team names, dates, groups) never changes
+  const [predOverrides, setPredOverrides] = useState({});
+  const [realResults, setRealResults]     = useState({});
+  const [syncStatus, setSyncStatus]       = useState(null);
+  const [syncMsg, setSyncMsg]             = useState("");
+  const [syncedAt, setSyncedAt]           = useState("");
+  const [editingMatch, setEditingMatch]   = useState(null);
+  const [syncDebug, setSyncDebug]         = useState("");
 
-  // Load persisted data from localStorage with schema validation
+  // Effective predictions: PREDICTIONS structure + synced scores applied on top
+  const predictions = PREDICTIONS.map(m => {
+    const ov = predOverrides[matchKey(m)];
+    return ov ? { ...m, p1: ov.p1, p2: ov.p2 } : m;
+  });
+
+  // Load persisted data from localStorage
   useEffect(() => {
+    // Clean up legacy key from previous version
+    localStorage.removeItem("quiniela_predictions");
+
     try {
       const saved = localStorage.getItem("quiniela_real_results");
       if (saved) {
         const parsed = JSON.parse(saved);
-        // Validate: must be an object with {r1,r2} values
         if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
           setRealResults(parsed);
         }
@@ -292,15 +327,14 @@ export default function Home() {
     } catch {}
 
     try {
-      const savedPreds = localStorage.getItem("quiniela_predictions");
-      if (savedPreds) {
-        const parsed = JSON.parse(savedPreds);
-        // Validate: must be array of matches with required fields
-        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].t1 && parsed[0].t2) {
-          setPredictions(parsed);
+      const savedOv = localStorage.getItem("quiniela_pred_overrides");
+      if (savedOv) {
+        const parsed = JSON.parse(savedOv);
+        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+          setPredOverrides(parsed);
         }
       }
-    } catch { localStorage.removeItem("quiniela_predictions"); }
+    } catch { localStorage.removeItem("quiniela_pred_overrides"); }
   }, []);
 
   function saveRealResult(match, result) {
@@ -318,33 +352,42 @@ export default function Home() {
   async function syncFromSheet() {
     setSyncStatus("loading");
     setSyncMsg("");
-    // Abort after 10 seconds
+    setSyncDebug("");
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
     try {
       const res = await fetch("/api/sync", { signal: controller.signal });
       clearTimeout(timeout);
       const data = await res.json();
+
       if (data.error) {
         setSyncStatus("error");
         setSyncMsg(data.error);
-        setTimeout(() => setSyncStatus(null), 5000);
+        if (data.debug) setSyncDebug(data.debug);
+        setTimeout(() => setSyncStatus(null), 8000);
         return;
       }
-      // Validate response before applying
-      if (!Array.isArray(data.predictions) || data.predictions.length === 0) {
+
+      // Build overrides: only update scores for matches that exist in PREDICTIONS
+      const overrides = buildOverrides(data.rows ?? []);
+      const matchedCount = Object.keys(overrides).length;
+
+      if (matchedCount === 0) {
         setSyncStatus("error");
-        setSyncMsg("El spreadsheet no devolvió partidos válidos. Verifica que esté compartido como 'Cualquiera con el enlace puede ver'.");
-        setTimeout(() => setSyncStatus(null), 6000);
+        setSyncMsg("No se pudo hacer coincidir ningún partido del spreadsheet con la quiniela.");
+        if (data.debug) setSyncDebug(`Filas en sheet: ${data.totalRows}. Muestra: ${data.sample}`);
+        setTimeout(() => setSyncStatus(null), 8000);
         return;
       }
-      setPredictions(data.predictions);
-      try { localStorage.setItem("quiniela_predictions", JSON.stringify(data.predictions)); } catch {}
+
+      setPredOverrides(overrides);
+      try { localStorage.setItem("quiniela_pred_overrides", JSON.stringify(overrides)); } catch {}
+
       const at = new Date(data.syncedAt).toLocaleString("es-MX", { dateStyle:"short", timeStyle:"short" });
       setSyncedAt(at);
       try { localStorage.setItem("quiniela_synced_at", at); } catch {}
       setSyncStatus("ok");
-      setSyncMsg(`¡Listo! ${data.predictions.length} partidos actualizados.`);
+      setSyncMsg(`¡Listo! ${matchedCount} de ${PREDICTIONS.length} partidos actualizados desde el spreadsheet.`);
     } catch (e) {
       clearTimeout(timeout);
       setSyncStatus("error");
@@ -352,12 +395,22 @@ export default function Home() {
         ? "La conexión tardó demasiado. Intenta de nuevo."
         : "No se pudo conectar. Verifica tu internet.");
     }
-    setTimeout(() => setSyncStatus(null), 5000);
+    setTimeout(() => setSyncStatus(null), 8000);
+  }
+
+  function resetOverrides() {
+    setPredOverrides({});
+    setSyncedAt("");
+    try {
+      localStorage.removeItem("quiniela_pred_overrides");
+      localStorage.removeItem("quiniela_synced_at");
+    } catch {}
   }
 
   const standings = computeStandings(predictions, realResults);
   const adv = getAdvancing(standings);
   const realCount = Object.keys(realResults).length;
+  const overrideCount = Object.keys(predOverrides).length;
 
   const sheetUrl = "https://docs.google.com/spreadsheets/d/1NDqZzWfJMsM9oHv_dKOnNFi5BykFaEx4/edit";
 
@@ -423,12 +476,21 @@ export default function Home() {
               </div>
             )}
             {syncStatus === "error" && (
-              <div className="mt-3 bg-red-500/30 border border-red-300 text-white rounded-xl px-4 py-2 text-sm font-medium">
-                ❌ {syncMsg}
+              <div className="mt-3 bg-red-500/30 border border-red-300 text-white rounded-xl px-4 py-2 text-sm">
+                <p className="font-bold">❌ {syncMsg}</p>
+                {syncDebug && <p className="mt-1 text-xs opacity-80 font-mono break-all">{syncDebug}</p>}
               </div>
             )}
-            {syncedAt && syncStatus !== "error" && syncStatus !== "loading" && (
-              <p className="text-green-300 text-xs mt-2">Última actualización: {syncedAt}</p>
+            {syncedAt && syncStatus == null && overrideCount > 0 && (
+              <div className="mt-2 flex items-center justify-center gap-3 flex-wrap">
+                <p className="text-green-300 text-xs">🔄 {overrideCount} partidos sync · {syncedAt}</p>
+                <button
+                  onClick={resetOverrides}
+                  className="text-xs text-green-300 underline underline-offset-2"
+                >
+                  Restablecer originales
+                </button>
+              </div>
             )}
           </div>
         </div>
