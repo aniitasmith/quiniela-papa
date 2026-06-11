@@ -106,7 +106,15 @@ const GROUP_FLAGS = {
   "Inglaterra":"🏴󠁧󠁢󠁥󠁮󠁧󠁿","Croacia":"🇭🇷","Ghana":"🇬🇭","Panamá":"🇵🇦",
 };
 
-function flag(t) { return GROUP_FLAGS[t] || "🏳️"; }
+// Normalize: strip accents + lowercase for fuzzy flag lookup
+// Handles "Mexico" → "México", "Belgica" → "Bélgica", etc.
+const _norm = s => s?.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").trim() ?? "";
+const _flagByNorm = Object.fromEntries(
+  Object.entries(GROUP_FLAGS).map(([k,v]) => [_norm(k), v])
+);
+function flag(t) {
+  return GROUP_FLAGS[t] ?? _flagByNorm[_norm(t)] ?? "🏳️";
+}
 
 // predictions: the base list (hardcoded or synced from sheet)
 // realResults: { [matchKey]: { r1, r2 } } — actual scores entered by user
@@ -185,6 +193,14 @@ function groupByDate(matches) {
 function ResultModal({ match, current, onSave, onClose }) {
   const [r1, setR1] = useState(current?.r1 ?? "");
   const [r2, setR2] = useState(current?.r2 ?? "");
+
+  // Close on Escape key
+  useEffect(() => {
+    const handler = e => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={onClose}>
       <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-sm" onClick={e => e.stopPropagation()}>
@@ -257,16 +273,34 @@ export default function Home() {
   const [syncedAt, setSyncedAt] = useState("");
   const [editingMatch, setEditingMatch] = useState(null); // match object being edited
 
-  // Load persisted data from localStorage
+  // Load persisted data from localStorage with schema validation
   useEffect(() => {
     try {
       const saved = localStorage.getItem("quiniela_real_results");
-      if (saved) setRealResults(JSON.parse(saved));
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Validate: must be an object with {r1,r2} values
+        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+          setRealResults(parsed);
+        }
+      }
+    } catch { localStorage.removeItem("quiniela_real_results"); }
+
+    try {
       const savedAt = localStorage.getItem("quiniela_synced_at");
       if (savedAt) setSyncedAt(savedAt);
-      const savedPreds = localStorage.getItem("quiniela_predictions");
-      if (savedPreds) setPredictions(JSON.parse(savedPreds));
     } catch {}
+
+    try {
+      const savedPreds = localStorage.getItem("quiniela_predictions");
+      if (savedPreds) {
+        const parsed = JSON.parse(savedPreds);
+        // Validate: must be array of matches with required fields
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].t1 && parsed[0].t2) {
+          setPredictions(parsed);
+        }
+      }
+    } catch { localStorage.removeItem("quiniela_predictions"); }
   }, []);
 
   function saveRealResult(match, result) {
@@ -275,7 +309,7 @@ export default function Home() {
       const next = { ...prev };
       if (result === null) delete next[key];
       else next[key] = result;
-      localStorage.setItem("quiniela_real_results", JSON.stringify(next));
+      try { localStorage.setItem("quiniela_real_results", JSON.stringify(next)); } catch {}
       return next;
     });
     setEditingMatch(null);
@@ -284,26 +318,41 @@ export default function Home() {
   async function syncFromSheet() {
     setSyncStatus("loading");
     setSyncMsg("");
+    // Abort after 10 seconds
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
     try {
-      const res = await fetch("/api/sync");
+      const res = await fetch("/api/sync", { signal: controller.signal });
+      clearTimeout(timeout);
       const data = await res.json();
       if (data.error) {
         setSyncStatus("error");
         setSyncMsg(data.error);
+        setTimeout(() => setSyncStatus(null), 5000);
+        return;
+      }
+      // Validate response before applying
+      if (!Array.isArray(data.predictions) || data.predictions.length === 0) {
+        setSyncStatus("error");
+        setSyncMsg("El spreadsheet no devolvió partidos válidos. Verifica que esté compartido como 'Cualquiera con el enlace puede ver'.");
+        setTimeout(() => setSyncStatus(null), 6000);
         return;
       }
       setPredictions(data.predictions);
-      localStorage.setItem("quiniela_predictions", JSON.stringify(data.predictions));
+      try { localStorage.setItem("quiniela_predictions", JSON.stringify(data.predictions)); } catch {}
       const at = new Date(data.syncedAt).toLocaleString("es-MX", { dateStyle:"short", timeStyle:"short" });
       setSyncedAt(at);
-      localStorage.setItem("quiniela_synced_at", at);
+      try { localStorage.setItem("quiniela_synced_at", at); } catch {}
       setSyncStatus("ok");
       setSyncMsg(`¡Listo! ${data.predictions.length} partidos actualizados.`);
-    } catch {
+    } catch (e) {
+      clearTimeout(timeout);
       setSyncStatus("error");
-      setSyncMsg("No se pudo conectar. Verifica tu internet.");
+      setSyncMsg(e.name === "AbortError"
+        ? "La conexión tardó demasiado. Intenta de nuevo."
+        : "No se pudo conectar. Verifica tu internet.");
     }
-    setTimeout(() => setSyncStatus(null), 4000);
+    setTimeout(() => setSyncStatus(null), 5000);
   }
 
   const standings = computeStandings(predictions, realResults);
@@ -553,9 +602,10 @@ export default function Home() {
                           {real && <span className="text-white font-bold text-xs bg-blue-500 px-2 py-0.5 rounded-full">✏️ Real</span>}
                         </div>
                         <div className="px-3 py-3 flex items-center gap-2">
-                          <div className={`flex-1 flex items-center gap-2 ${!homeWins && !draw ? "opacity-40" : ""}`}>
-                            <span className="text-3xl leading-none">{flag(m.t1)}</span>
-                            <span className="font-bold text-base leading-tight text-green-900">{m.t1}</span>
+                          {/* home team — name always visible, flag dims if lost */}
+                          <div className="flex-1 flex items-center gap-2 min-w-0">
+                            <span className={`text-3xl leading-none shrink-0 ${!homeWins && !draw ? "opacity-40" : ""}`}>{flag(m.t1)}</span>
+                            <span className="font-bold text-base leading-tight text-green-900 truncate">{m.t1}</span>
                           </div>
                           <button
                             onClick={() => setEditingMatch(m)}
@@ -564,9 +614,10 @@ export default function Home() {
                             <div className="font-black text-2xl whitespace-nowrap">{g1} – {g2}</div>
                             <div className="text-xs opacity-70 mt-0.5">{real ? "resultado real" : "predicción · tocar"}</div>
                           </button>
-                          <div className={`flex-1 flex items-center gap-2 justify-end ${!awayWins && !draw ? "opacity-40" : ""}`}>
-                            <span className="font-bold text-base leading-tight text-right text-green-900">{m.t2}</span>
-                            <span className="text-3xl leading-none">{flag(m.t2)}</span>
+                          {/* away team — name always visible, flag dims if lost */}
+                          <div className="flex-1 flex items-center gap-2 justify-end min-w-0">
+                            <span className="font-bold text-base leading-tight text-right text-green-900 truncate">{m.t2}</span>
+                            <span className={`text-3xl leading-none shrink-0 ${!awayWins && !draw ? "opacity-40" : ""}`}>{flag(m.t2)}</span>
                           </div>
                         </div>
                         {real && (
