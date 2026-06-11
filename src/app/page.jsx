@@ -359,24 +359,40 @@ export default function Home() {
       const res = await fetch("/api/sync", { signal: controller.signal });
       clearTimeout(timeout);
       const data = await res.json();
+      console.log("[sync] respuesta del servidor:", data);
 
       if (data.error) {
         setSyncStatus("error");
         setSyncMsg(data.error);
-        if (data.debug) setSyncDebug(data.debug);
+        setSyncDebug(data.debug ?? "");
         setTimeout(() => setSyncStatus(null), 8000);
         return;
       }
 
+      const rows = data.rows ?? [];
+      console.log("[sync] filas parseadas del sheet:", rows.length, rows.slice(0, 3));
+      console.log("[sync] índice de PREDICTIONS (norm):", Object.keys(_predIndex).slice(0, 5));
+
+      // Log each row's match attempt
+      rows.forEach(row => {
+        const k = `${_normKey(row.t1)}|${_normKey(row.t2)}`;
+        const found = _predIndex[k];
+        if (!found) {
+          console.warn(`[sync] sin match: "${row.t1}" vs "${row.t2}" → normKey="${k}"`);
+        }
+      });
+
       // Build overrides: only update scores for matches that exist in PREDICTIONS
-      const overrides = buildOverrides(data.rows ?? []);
+      const overrides = buildOverrides(rows);
       const matchedCount = Object.keys(overrides).length;
+      console.log("[sync] matches encontrados:", matchedCount, "de", rows.length, "filas");
 
       if (matchedCount === 0) {
+        const sheetTeams = rows.slice(0, 4).map(r => `"${r.t1}" vs "${r.t2}"`).join(", ");
         setSyncStatus("error");
         setSyncMsg("No se pudo hacer coincidir ningún partido del spreadsheet con la quiniela.");
-        if (data.debug) setSyncDebug(`Filas en sheet: ${data.totalRows}. Muestra: ${data.sample}`);
-        setTimeout(() => setSyncStatus(null), 8000);
+        setSyncDebug(`Equipos en el sheet: ${sheetTeams || "(ninguno)"} | Cabeceras: ${data.headers}`);
+        setTimeout(() => setSyncStatus(null), 15000);
         return;
       }
 
@@ -478,7 +494,11 @@ export default function Home() {
             {syncStatus === "error" && (
               <div className="mt-3 bg-red-500/30 border border-red-300 text-white rounded-xl px-4 py-2 text-sm">
                 <p className="font-bold">❌ {syncMsg}</p>
-                {syncDebug && <p className="mt-1 text-xs opacity-80 font-mono break-all">{syncDebug}</p>}
+                {syncDebug && (
+                  <p className="mt-2 text-xs bg-black/20 rounded p-2 font-mono break-all leading-relaxed">
+                    {syncDebug}
+                  </p>
+                )}
               </div>
             )}
             {syncedAt && syncStatus == null && overrideCount > 0 && (
