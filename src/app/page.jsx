@@ -112,6 +112,34 @@ function flag(t) { return GROUP_FLAGS[t] || "🏳️"; }
 // realResults: { [matchKey]: { r1, r2 } } — actual scores entered by user
 function matchKey(m) { return `${m.d}|${m.t1}|${m.t2}`; }
 
+// ── Scoring (Reglas Oficiales de la Quiniela) ──
+// 3 pts: acertar ganador · 2 pts: acertar empate
+// 2 pts: acertar goles del equipo local (independiente del resultado)
+// 2 pts: acertar goles del equipo visitante (independiente del resultado)
+function scoreMatch(pred, real) {
+  const { p1, p2 } = pred;
+  const { r1, r2 } = real;
+  let pts = 0;
+  let breakdown = { winner: 0, draw: 0, goalsHome: 0, goalsAway: 0 };
+  const predDraw = p1 === p2, realDraw = r1 === r2;
+  if (realDraw && predDraw) { pts += 2; breakdown.draw = 2; }
+  else if (!realDraw && !predDraw && (p1 > p2) === (r1 > r2)) { pts += 3; breakdown.winner = 3; }
+  if (p1 === r1) { pts += 2; breakdown.goalsHome = 2; }
+  if (p2 === r2) { pts += 2; breakdown.goalsAway = 2; }
+  return { pts, breakdown };
+}
+
+function totalScore(predictions, realResults) {
+  let total = 0, played = 0;
+  predictions.forEach(m => {
+    const real = realResults[matchKey(m)];
+    if (!real) return;
+    total += scoreMatch(m, real).pts;
+    played++;
+  });
+  return { total, played };
+}
+
 function computeStandings(predictions, realResults) {
   const st = {};
   Object.keys(GROUPS_TEAMS).forEach(g =>
@@ -284,10 +312,13 @@ export default function Home() {
 
   const sheetUrl = "https://docs.google.com/spreadsheets/d/1NDqZzWfJMsM9oHv_dKOnNFi5BykFaEx4/edit";
 
+  const score = totalScore(predictions, realResults);
+
   const tabs = [
     { id:"grupos",   icon:"🏟️",  label:"Grupos"   },
     { id:"bracket",  icon:"🏆",  label:"Bracket"  },
     { id:"partidos", icon:"⚽",  label:"Partidos" },
+    { id:"puntos",   icon:"🎯",  label:"Mis Puntos" },
   ];
 
   return (
@@ -556,6 +587,120 @@ export default function Home() {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+        {/* ══ TAB: PUNTOS ══ */}
+        {tab === "puntos" && (
+          <div>
+            <div className="text-center mb-6">
+              <h2 className="text-2xl font-black text-green-900">🎯 Mis Puntos</h2>
+              <p className="text-gray-500 text-base mt-1">
+                Basado en los resultados reales que anotaste
+              </p>
+            </div>
+
+            {/* Score card grande */}
+            <div className="bg-gradient-to-br from-green-700 to-green-900 rounded-3xl p-6 text-center text-white shadow-xl mb-6">
+              <div className="text-6xl font-black mb-1">{score.total}</div>
+              <div className="text-green-200 text-lg font-bold">puntos totales</div>
+              <div className="mt-3 text-green-300 text-sm">
+                de {score.played} partido{score.played !== 1 ? "s" : ""} jugado{score.played !== 1 ? "s" : ""}
+                {" · "}máximo posible: {score.played * 7} pts
+              </div>
+              {score.played === 0 && (
+                <div className="mt-4 bg-white/10 rounded-2xl px-4 py-3 text-sm text-green-200">
+                  Anota los resultados reales en la pestaña <strong>⚽ Partidos</strong> para ver tu puntaje
+                </div>
+              )}
+            </div>
+
+            {/* Reglas de puntuación */}
+            <div className="bg-white rounded-2xl shadow-md border-2 border-green-100 overflow-hidden mb-5">
+              <div className="bg-green-700 px-4 py-3">
+                <h3 className="text-white font-black text-lg">📋 Cómo se cuentan los puntos</h3>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {[
+                  { icon:"🥇", label:"Acertar el GANADOR", pts:"3 pts", color:"text-yellow-600" },
+                  { icon:"🤝", label:"Acertar el EMPATE",  pts:"2 pts", color:"text-blue-600"   },
+                  { icon:"⚽", label:"Acertar goles del equipo local (sin importar quién gane)", pts:"2 pts", color:"text-green-700" },
+                  { icon:"⚽", label:"Acertar goles del equipo visitante (sin importar quién gane)", pts:"2 pts", color:"text-green-700" },
+                ].map((r, i) => (
+                  <div key={i} className="flex items-center gap-3 px-4 py-4">
+                    <span className="text-3xl">{r.icon}</span>
+                    <span className="flex-1 text-gray-800 font-medium text-base leading-tight">{r.label}</span>
+                    <span className={`font-black text-xl ${r.color} shrink-0`}>{r.pts}</span>
+                  </div>
+                ))}
+                <div className="flex items-center gap-3 px-4 py-4 bg-yellow-50">
+                  <span className="text-3xl">🏆</span>
+                  <span className="flex-1 text-yellow-800 font-bold text-base">Máximo por partido (ganador + ambos goles)</span>
+                  <span className="font-black text-2xl text-yellow-600 shrink-0">7 pts</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Premios */}
+            <div className="bg-white rounded-2xl shadow-md border-2 border-yellow-100 overflow-hidden mb-5">
+              <div className="bg-yellow-500 px-4 py-3">
+                <h3 className="text-white font-black text-lg">🏅 Premios</h3>
+              </div>
+              <div className="divide-y divide-yellow-100">
+                <div className="flex items-center gap-3 px-4 py-4">
+                  <span className="text-4xl">🥇</span>
+                  <div className="flex-1">
+                    <div className="font-black text-lg text-gray-900">1er Lugar</div>
+                    <div className="text-gray-500 text-sm">Mayor puntaje total</div>
+                  </div>
+                  <span className="font-black text-xl text-yellow-600">70%</span>
+                </div>
+                <div className="flex items-center gap-3 px-4 py-4">
+                  <span className="text-4xl">🥈</span>
+                  <div className="flex-1">
+                    <div className="font-black text-lg text-gray-900">2do Lugar</div>
+                    <div className="text-gray-500 text-sm">Segundo mayor puntaje</div>
+                  </div>
+                  <span className="font-black text-xl text-gray-500">30%</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Desglose por partido si hay resultados */}
+            {score.played > 0 && (
+              <div className="bg-white rounded-2xl shadow-md border-2 border-green-100 overflow-hidden">
+                <div className="bg-green-700 px-4 py-3">
+                  <h3 className="text-white font-black text-lg">📊 Desglose por partido</h3>
+                </div>
+                <div className="divide-y divide-gray-100">
+                  {predictions.filter(m => realResults[matchKey(m)]).map((m, i) => {
+                    const real = realResults[matchKey(m)];
+                    const { pts, breakdown } = scoreMatch(m, real);
+                    return (
+                      <div key={i} className="px-4 py-3">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-xl">{flag(m.t1)}</span>
+                          <span className="font-bold text-sm text-gray-800">{m.t1}</span>
+                          <span className="text-gray-400 text-sm font-bold mx-1">{real.r1}–{real.r2}</span>
+                          <span className="font-bold text-sm text-gray-800">{m.t2}</span>
+                          <span className="text-xl">{flag(m.t2)}</span>
+                          <span className={`ml-auto font-black text-lg ${pts >= 5 ? "text-green-600" : pts >= 2 ? "text-yellow-600" : "text-gray-400"}`}>
+                            {pts} pts
+                          </span>
+                        </div>
+                        <div className="flex gap-1 flex-wrap">
+                          <span className="text-xs text-gray-400">Predicción: {m.p1}–{m.p2} ·</span>
+                          {breakdown.winner > 0 && <span className="text-xs bg-green-100 text-green-700 px-1.5 rounded font-bold">+3 ganador</span>}
+                          {breakdown.draw > 0   && <span className="text-xs bg-blue-100 text-blue-700 px-1.5 rounded font-bold">+2 empate</span>}
+                          {breakdown.goalsHome > 0 && <span className="text-xs bg-emerald-100 text-emerald-700 px-1.5 rounded font-bold">+2 goles {m.t1.split(" ")[0]}</span>}
+                          {breakdown.goalsAway > 0 && <span className="text-xs bg-emerald-100 text-emerald-700 px-1.5 rounded font-bold">+2 goles {m.t2.split(" ")[0]}</span>}
+                          {pts === 0 && <span className="text-xs text-gray-400">sin puntos</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
